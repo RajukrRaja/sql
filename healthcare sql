@@ -1,0 +1,121 @@
+-- Drop tables if they exist
+DROP TABLE IF EXISTS Appointments, Patients, Doctors, Specializations, Users;
+
+-- Users Table
+CREATE TABLE Users (
+    user_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    role ENUM('admin', 'doctor', 'patient') NOT NULL
+);
+
+-- Specializations Table
+CREATE TABLE Specializations (
+    specialization_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) UNIQUE NOT NULL
+);
+
+-- Doctors Table
+CREATE TABLE Doctors (
+    doctor_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    specialization_id INT NOT NULL,
+    experience INT,
+    available_slots INT DEFAULT 10,
+    FOREIGN KEY (user_id) REFERENCES Users(user_id),
+    FOREIGN KEY (specialization_id) REFERENCES Specializations(specialization_id)
+);
+
+-- Patients Table
+CREATE TABLE Patients (
+    patient_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    age INT,
+    gender ENUM('Male', 'Female', 'Other'),
+    FOREIGN KEY (user_id) REFERENCES Users(user_id)
+);
+
+-- Appointments Table
+CREATE TABLE Appointments (
+    appointment_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT NOT NULL,
+    doctor_id INT NOT NULL,
+    appointment_date DATE NOT NULL,
+    appointment_time TIME NOT NULL,
+    status ENUM('Scheduled', 'Completed', 'Cancelled') DEFAULT 'Scheduled',
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id),
+    FOREIGN KEY (doctor_id) REFERENCES Doctors(doctor_id)
+);
+
+-- Indexes
+CREATE INDEX idx_doctor_specialization ON Doctors(specialization_id);
+CREATE INDEX idx_appointment_date ON Appointments(appointment_date);
+
+-- Sample Data
+INSERT INTO Users (name, email, password, role) VALUES
+('Dr. John Doe', 'john@example.com', 'hashedpassword1', 'doctor'),
+('Jane Smith', 'jane@example.com', 'hashedpassword2', 'patient');
+
+INSERT INTO Specializations (name) VALUES ('Cardiology'), ('Neurology');
+
+INSERT INTO Doctors (user_id, specialization_id, experience, available_slots) VALUES (1, 1, 5, 10);
+
+INSERT INTO Patients (user_id, age, gender) VALUES (2, 30, 'Female');
+
+INSERT INTO Appointments (patient_id, doctor_id, appointment_date, appointment_time)
+VALUES (1, 1, '2025-04-15', '10:00:00');
+
+-- View to get appointment details
+CREATE VIEW AppointmentDetails AS
+SELECT 
+    a.appointment_id,
+    u1.name AS doctor_name,
+    u2.name AS patient_name,
+    s.name AS specialization,
+    a.appointment_date,
+    a.appointment_time,
+    a.status
+FROM Appointments a
+JOIN Doctors d ON a.doctor_id = d.doctor_id
+JOIN Patients p ON a.patient_id = p.patient_id
+JOIN Users u1 ON d.user_id = u1.user_id
+JOIN Users u2 ON p.user_id = u2.user_id
+JOIN Specializations s ON d.specialization_id = s.specialization_id;
+
+-- Stored Procedure to Book Appointment
+DELIMITER //
+CREATE PROCEDURE BookAppointment(
+    IN pid INT,
+    IN did INT,
+    IN adate DATE,
+    IN atime TIME
+)
+BEGIN
+    DECLARE slots INT;
+    SELECT available_slots INTO slots FROM Doctors WHERE doctor_id = did;
+    IF slots > 0 THEN
+        INSERT INTO Appointments (patient_id, doctor_id, appointment_date, appointment_time)
+        VALUES (pid, did, adate, atime);
+        UPDATE Doctors SET available_slots = available_slots - 1 WHERE doctor_id = did;
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'No available slots for this doctor.';
+    END IF;
+END;
+//
+DELIMITER ;
+
+-- Trigger to auto-cancel past appointments not marked as completed
+DELIMITER //
+CREATE TRIGGER CancelPastAppointments
+AFTER INSERT ON Appointments
+FOR EACH ROW
+BEGIN
+    UPDATE Appointments
+    SET status = 'Cancelled'
+    WHERE appointment_date < CURDATE() AND status = 'Scheduled';
+END;
+//
+DELIMITER ;
+
+-- Done
