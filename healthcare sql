@@ -1,121 +1,376 @@
--- Drop tables if they exist
-DROP TABLE IF EXISTS Appointments, Patients, Doctors, Specializations, Users;
+/* ---------------------------------------------------------
+   ORIGINAL TABLES (Users, Specializations, Doctors, Patients,
+   Appointments) — YOU ALREADY PROVIDED
+------------------------------------------------------------ */
 
--- Users Table
-CREATE TABLE Users (
-    user_id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(100) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
-    role ENUM('admin', 'doctor', 'patient') NOT NULL
-);
+/* ---------------------------------------------------------
+   1. Medical Records & Health Data
+------------------------------------------------------------ */
 
--- Specializations Table
-CREATE TABLE Specializations (
-    specialization_id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) UNIQUE NOT NULL
-);
-
--- Doctors Table
-CREATE TABLE Doctors (
-    doctor_id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT NOT NULL,
-    specialization_id INT NOT NULL,
-    experience INT,
-    available_slots INT DEFAULT 10,
-    FOREIGN KEY (user_id) REFERENCES Users(user_id),
-    FOREIGN KEY (specialization_id) REFERENCES Specializations(specialization_id)
-);
-
--- Patients Table
-CREATE TABLE Patients (
-    patient_id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT NOT NULL,
-    age INT,
-    gender ENUM('Male', 'Female', 'Other'),
-    FOREIGN KEY (user_id) REFERENCES Users(user_id)
-);
-
--- Appointments Table
-CREATE TABLE Appointments (
-    appointment_id INT AUTO_INCREMENT PRIMARY KEY,
+CREATE TABLE MedicalRecords (
+    record_id INT AUTO_INCREMENT PRIMARY KEY,
     patient_id INT NOT NULL,
     doctor_id INT NOT NULL,
-    appointment_date DATE NOT NULL,
-    appointment_time TIME NOT NULL,
-    status ENUM('Scheduled', 'Completed', 'Cancelled') DEFAULT 'Scheduled',
+    diagnosis TEXT,
+    notes TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (patient_id) REFERENCES Patients(patient_id),
     FOREIGN KEY (doctor_id) REFERENCES Doctors(doctor_id)
 );
 
--- Indexes
-CREATE INDEX idx_doctor_specialization ON Doctors(specialization_id);
-CREATE INDEX idx_appointment_date ON Appointments(appointment_date);
+CREATE TABLE Prescriptions (
+    prescription_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT NOT NULL,
+    doctor_id INT NOT NULL,
+    record_id INT,
+    issued_date DATE,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id),
+    FOREIGN KEY (doctor_id) REFERENCES Doctors(doctor_id),
+    FOREIGN KEY (record_id) REFERENCES MedicalRecords(record_id)
+);
 
--- Sample Data
-INSERT INTO Users (name, email, password, role) VALUES
-('Dr. John Doe', 'john@example.com', 'hashedpassword1', 'doctor'),
-('Jane Smith', 'jane@example.com', 'hashedpassword2', 'patient');
+CREATE TABLE PrescriptionItems (
+    item_id INT AUTO_INCREMENT PRIMARY KEY,
+    prescription_id INT NOT NULL,
+    medicine_name VARCHAR(255),
+    dosage VARCHAR(100),
+    duration VARCHAR(50),
+    FOREIGN KEY (prescription_id) REFERENCES Prescriptions(prescription_id)
+);
 
-INSERT INTO Specializations (name) VALUES ('Cardiology'), ('Neurology');
+CREATE TABLE LabTests (
+    test_id INT AUTO_INCREMENT PRIMARY KEY,
+    test_name VARCHAR(100),
+    description TEXT
+);
 
-INSERT INTO Doctors (user_id, specialization_id, experience, available_slots) VALUES (1, 1, 5, 10);
+CREATE TABLE LabRequests (
+    request_id INT AUTO_INCREMENT PRIMARY KEY,
+    record_id INT NOT NULL,
+    test_id INT NOT NULL,
+    requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('Pending','Processing','Completed') DEFAULT 'Pending',
+    FOREIGN KEY (record_id) REFERENCES MedicalRecords(record_id),
+    FOREIGN KEY (test_id) REFERENCES LabTests(test_id)
+);
 
-INSERT INTO Patients (user_id, age, gender) VALUES (2, 30, 'Female');
+CREATE TABLE LabResults (
+    result_id INT AUTO_INCREMENT PRIMARY KEY,
+    request_id INT NOT NULL,
+    result_text TEXT,
+    result_date DATE,
+    FOREIGN KEY (request_id) REFERENCES LabRequests(request_id)
+);
 
-INSERT INTO Appointments (patient_id, doctor_id, appointment_date, appointment_time)
-VALUES (1, 1, '2025-04-15', '10:00:00');
+/* ---------------------------------------------------------
+   2. Billing and Payments
+------------------------------------------------------------ */
 
--- View to get appointment details
-CREATE VIEW AppointmentDetails AS
-SELECT 
-    a.appointment_id,
-    u1.name AS doctor_name,
-    u2.name AS patient_name,
-    s.name AS specialization,
-    a.appointment_date,
-    a.appointment_time,
-    a.status
-FROM Appointments a
-JOIN Doctors d ON a.doctor_id = d.doctor_id
-JOIN Patients p ON a.patient_id = p.patient_id
-JOIN Users u1 ON d.user_id = u1.user_id
-JOIN Users u2 ON p.user_id = u2.user_id
-JOIN Specializations s ON d.specialization_id = s.specialization_id;
+CREATE TABLE Bills (
+    bill_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT NOT NULL,
+    total_amount DECIMAL(10,2),
+    status ENUM('Pending','Paid','Cancelled') DEFAULT 'Pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id)
+);
 
--- Stored Procedure to Book Appointment
-DELIMITER //
-CREATE PROCEDURE BookAppointment(
-    IN pid INT,
-    IN did INT,
-    IN adate DATE,
-    IN atime TIME
-)
-BEGIN
-    DECLARE slots INT;
-    SELECT available_slots INTO slots FROM Doctors WHERE doctor_id = did;
-    IF slots > 0 THEN
-        INSERT INTO Appointments (patient_id, doctor_id, appointment_date, appointment_time)
-        VALUES (pid, did, adate, atime);
-        UPDATE Doctors SET available_slots = available_slots - 1 WHERE doctor_id = did;
-    ELSE
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'No available slots for this doctor.';
-    END IF;
-END;
-//
-DELIMITER ;
+CREATE TABLE BillItems (
+    bill_item_id INT AUTO_INCREMENT PRIMARY KEY,
+    bill_id INT NOT NULL,
+    description VARCHAR(255),
+    amount DECIMAL(10,2),
+    FOREIGN KEY (bill_id) REFERENCES Bills(bill_id)
+);
 
--- Trigger to auto-cancel past appointments not marked as completed
-DELIMITER //
-CREATE TRIGGER CancelPastAppointments
-AFTER INSERT ON Appointments
-FOR EACH ROW
-BEGIN
-    UPDATE Appointments
-    SET status = 'Cancelled'
-    WHERE appointment_date < CURDATE() AND status = 'Scheduled';
-END;
-//
-DELIMITER ;
+CREATE TABLE Payments (
+    payment_id INT AUTO_INCREMENT PRIMARY KEY,
+    bill_id INT NOT NULL,
+    amount DECIMAL(10,2),
+    payment_method ENUM('Cash','UPI','Card','Online'),
+    payment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (bill_id) REFERENCES Bills(bill_id)
+);
 
--- Done
+/* ---------------------------------------------------------
+   3. Pharmacy & Medicines
+------------------------------------------------------------ */
+
+CREATE TABLE Medicines (
+    medicine_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255),
+    type VARCHAR(100),
+    price DECIMAL(10,2),
+    stock INT DEFAULT 0
+);
+
+CREATE TABLE MedicineStockLogs (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    medicine_id INT NOT NULL,
+    change_amount INT,
+    reason VARCHAR(255),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (medicine_id) REFERENCES Medicines(medicine_id)
+);
+
+CREATE TABLE PharmacySales (
+    sale_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT,
+    total_amount DECIMAL(10,2),
+    sale_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id)
+);
+
+CREATE TABLE PharmacySaleItems (
+    sale_item_id INT AUTO_INCREMENT PRIMARY KEY,
+    sale_id INT NOT NULL,
+    medicine_id INT NOT NULL,
+    quantity INT,
+    price DECIMAL(10,2),
+    FOREIGN KEY (sale_id) REFERENCES PharmacySales(sale_id),
+    FOREIGN KEY (medicine_id) REFERENCES Medicines(medicine_id)
+);
+
+/* ---------------------------------------------------------
+   4. Inventory & Assets
+------------------------------------------------------------ */
+
+CREATE TABLE InventoryCategories (
+    category_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255)
+);
+
+CREATE TABLE InventoryItems (
+    item_id INT AUTO_INCREMENT PRIMARY KEY,
+    category_id INT,
+    item_name VARCHAR(255),
+    quantity INT,
+    FOREIGN KEY (category_id) REFERENCES InventoryCategories(category_id)
+);
+
+CREATE TABLE InventoryLogs (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    item_id INT,
+    quantity_change INT,
+    reason VARCHAR(255),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES InventoryItems(item_id)
+);
+
+/* ---------------------------------------------------------
+   5. HR & Staff Management
+------------------------------------------------------------ */
+
+CREATE TABLE Staff (
+    staff_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255),
+    role VARCHAR(100),
+    salary DECIMAL(10,2),
+    join_date DATE
+);
+
+CREATE TABLE Attendance (
+    attendance_id INT AUTO_INCREMENT PRIMARY KEY,
+    staff_id INT NOT NULL,
+    date DATE,
+    status ENUM('Present','Absent','Leave'),
+    FOREIGN KEY (staff_id) REFERENCES Staff(staff_id)
+);
+
+CREATE TABLE Payroll (
+    payroll_id INT AUTO_INCREMENT PRIMARY KEY,
+    staff_id INT NOT NULL,
+    month VARCHAR(20),
+    amount DECIMAL(10,2),
+    paid_on DATE,
+    FOREIGN KEY (staff_id) REFERENCES Staff(staff_id)
+);
+
+CREATE TABLE Shifts (
+    shift_id INT AUTO_INCREMENT PRIMARY KEY,
+    staff_id INT NOT NULL,
+    shift_date DATE,
+    shift_time VARCHAR(50),
+    FOREIGN KEY (staff_id) REFERENCES Staff(staff_id)
+);
+
+/* ---------------------------------------------------------
+   6. Insurance
+------------------------------------------------------------ */
+
+CREATE TABLE InsuranceCompanies (
+    company_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255),
+    contact VARCHAR(255)
+);
+
+CREATE TABLE PatientInsurance (
+    insurance_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT NOT NULL,
+    company_id INT NOT NULL,
+    policy_number VARCHAR(255),
+    coverage_amount DECIMAL(10,2),
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id),
+    FOREIGN KEY (company_id) REFERENCES InsuranceCompanies(company_id)
+);
+
+CREATE TABLE InsuranceClaims (
+    claim_id INT AUTO_INCREMENT PRIMARY KEY,
+    insurance_id INT NOT NULL,
+    bill_id INT NOT NULL,
+    status ENUM('Pending','Approved','Rejected') DEFAULT 'Pending',
+    FOREIGN KEY (insurance_id) REFERENCES PatientInsurance(insurance_id),
+    FOREIGN KEY (bill_id) REFERENCES Bills(bill_id)
+);
+
+/* ---------------------------------------------------------
+   7. Feedback, Reviews, Complaints
+------------------------------------------------------------ */
+
+CREATE TABLE Feedback (
+    feedback_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT,
+    doctor_id INT,
+    rating INT,
+    comments TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id),
+    FOREIGN KEY (doctor_id) REFERENCES Doctors(doctor_id)
+);
+
+CREATE TABLE Complaints (
+    complaint_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT,
+    message TEXT,
+    status ENUM('Open','In Progress','Resolved') DEFAULT 'Open',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id)
+);
+
+/* ---------------------------------------------------------
+   8. Communication / Notifications
+------------------------------------------------------------ */
+
+CREATE TABLE Notifications (
+    notification_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT,
+    message TEXT,
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES Users(user_id)
+);
+
+CREATE TABLE Messages (
+    message_id INT AUTO_INCREMENT PRIMARY KEY,
+    sender_id INT,
+    receiver_id INT,
+    message TEXT,
+    sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (sender_id) REFERENCES Users(user_id),
+    FOREIGN KEY (receiver_id) REFERENCES Users(user_id)
+);
+
+/* ---------------------------------------------------------
+   9. Hospital Rooms / Beds
+------------------------------------------------------------ */
+
+CREATE TABLE Rooms (
+    room_id INT AUTO_INCREMENT PRIMARY KEY,
+    room_number VARCHAR(20),
+    room_type VARCHAR(100),
+    status ENUM('Available','Occupied') DEFAULT 'Available'
+);
+
+CREATE TABLE Beds (
+    bed_id INT AUTO_INCREMENT PRIMARY KEY,
+    room_id INT NOT NULL,
+    bed_number VARCHAR(20),
+    status ENUM('Available','Occupied') DEFAULT 'Available',
+    FOREIGN KEY (room_id) REFERENCES Rooms(room_id)
+);
+
+CREATE TABLE Admissions (
+    admission_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT NOT NULL,
+    bed_id INT,
+    admitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    discharged_at DATETIME,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id),
+    FOREIGN KEY (bed_id) REFERENCES Beds(bed_id)
+);
+
+/* ---------------------------------------------------------
+   10. Analytics / Logs
+------------------------------------------------------------ */
+
+CREATE TABLE ActivityLogs (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT,
+    action VARCHAR(255),
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES Users(user_id)
+);
+
+CREATE TABLE ErrorLogs (
+    error_id INT AUTO_INCREMENT PRIMARY KEY,
+    error_message TEXT,
+    occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE LoginHistory (
+    login_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT,
+    login_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    ip_address VARCHAR(100),
+    FOREIGN KEY (user_id) REFERENCES Users(user_id)
+);
+
+/* ---------------------------------------------------------
+   11. Ambulance & Emergency
+------------------------------------------------------------ */
+
+CREATE TABLE Ambulances (
+    ambulance_id INT AUTO_INCREMENT PRIMARY KEY,
+    vehicle_number VARCHAR(50),
+    status ENUM('Available','On Duty','Maintenance') DEFAULT 'Available'
+);
+
+CREATE TABLE EmergencyCalls (
+    call_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT,
+    ambulance_id INT,
+    location VARCHAR(255),
+    call_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id),
+    FOREIGN KEY (ambulance_id) REFERENCES Ambulances(ambulance_id)
+);
+
+/* ---------------------------------------------------------
+   12. Surgery & Operation Theater
+------------------------------------------------------------ */
+
+CREATE TABLE Surgeries (
+    surgery_id INT AUTO_INCREMENT PRIMARY KEY,
+    patient_id INT,
+    doctor_id INT,
+    surgery_type VARCHAR(255),
+    surgery_date DATE,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id),
+    FOREIGN KEY (doctor_id) REFERENCES Doctors(doctor_id)
+);
+
+CREATE TABLE OperationTheaters (
+    ot_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255),
+    status ENUM('Available','In Use','Maintenance') DEFAULT 'Available'
+);
+
+CREATE TABLE SurgerySchedules (
+    schedule_id INT AUTO_INCREMENT PRIMARY KEY,
+    surgery_id INT,
+    ot_id INT,
+    scheduled_time DATETIME,
+    FOREIGN KEY (surgery_id) REFERENCES Surgeries(surgery_id),
+    FOREIGN KEY (ot_id) REFERENCES OperationTheaters(ot_id)
+);
+
